@@ -1,0 +1,1732 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VIYAR — Калькулятор робіт конструктора (v3.7b)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @media print { .no-print { display:none !important; } body { background:white; } }
+    /* Ховаємо нативні спіннери у number для узгодженості */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="env,react">
+// === SoftNumberInput: allows typing multiple digits smoothly ===
+function SoftNumberInput({ value, onChange, step = '1', className = "mt-1 w-full p-2 border rounded-xl", ...rest }){
+  const { useState, useEffect, useRef } = React;
+  const [text, setText] = useState(value ?? '');
+  const prev = useRef(value);
+
+  useEffect(() => {
+    if (prev.current !== value) {
+      setText(value ?? '');
+      prev.current = value;
+    }
+  }, [value]);
+
+  const commit = () => {
+    const str = String(text ?? '').trim().replace(',', '.');
+    const num = str === '' ? 0 : (Number.isFinite(+str) ? +str : 0);
+    try { onChange && onChange(num); } catch(e){ console.warn(e); }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      pattern="[0-9]*[.,]?[0-9]*"
+      className={className}
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if(e.key === 'Enter'){ e.currentTarget.blur(); } }}
+      {...rest}
+    />
+  );
+}
+
+    
+
+// === SoftNumberInput2: select-all on focus, Tab/Enter commit ===
+function SoftNumberInput2({ value, onChange, step = '1', className = "mt-1 w-full p-2 border rounded-xl", ...rest }){
+  const { useState, useEffect, useRef } = React;
+  const [text, setText] = useState(value ?? '');
+  const prev = useRef(value);
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (prev.current !== value) {
+      setText(value ?? '');
+      prev.current = value;
+    }
+  }, [value]);
+
+  const commit = () => {
+    const str = String(text ?? '').trim().replace(',', '.');
+    const num = str === '' ? 0 : (Number.isFinite(+str) ? +str : 0);
+    try { onChange && onChange(num); } catch(e){ console.warn(e); }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      pattern="[0-9]*[.,]?[0-9]*"
+      className={className}
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onFocus={e => { focused.current = true; e.target.select(); }}
+      onMouseUp={e => { if (focused.current) { e.preventDefault(); focused.current = false; } }}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === 'Tab') {
+          commit();
+        }
+      }}
+      {...rest}
+    />
+  );
+}
+
+const { useState, useMemo, useReducer, useEffect } = React;
+
+    // ===== Утиліти =====
+    const fmt = (n, cur='UAH') => {
+      const v = Number.isFinite(+n) ? +n : 0;
+      try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; }
+    };
+    const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+    const asNum = v => { const n = parseFloat(String(v).replace(',','.')); return Number.isFinite(n)?n:0; };
+    const clone = (o)=> JSON.parse(JSON.stringify(o||{}));
+    const getByPath = (obj, path) => path.split('.').reduce((o,k)=> (o ? o[k] : undefined), obj);
+    const setByPath = (obj, path, val) => { const segs=path.split('.'); const last=segs.pop(); const target=segs.reduce((o,k)=> (o[k]==null ? (o[k]={}) : o[k]), obj); target[last]=val; };
+
+    // ===== Патерн автоселекту =====
+    function AutoSelectAny({value, onChange, min=0, step="0.01", className='', ...rest}){
+      const handleFocus = e => e.target.select();
+      const handleClick = e => e.target.select();
+      const handleMouseUp = e => e.preventDefault();
+      const handleWheel = e => e.currentTarget.blur();
+      return (
+        <input type="number" min={min} step={step} className={"mt-1 w-full p-2 border rounded-xl appearance-none " + className}
+          value={value} onChange={e=>onChange(asNum(e.target.value))}
+          onFocus={handleFocus} onClick={handleClick} onMouseUp={handleMouseUp} onWheel={handleWheel} {...rest} />
+      );
+    }
+    function StepperInput({value, onChange, min=0, max=null, step=1, className=''}){
+      const inc = () => { const nv = (value||0)+step; if(max!=null && nv>max) return; onChange(nv); };
+      const dec = () => { const nv = (value||0)-step; if(nv < min) return; onChange(nv); };
+      const handleFocus = e => e.target.select();
+      const handleClick = e => e.target.select();
+      const handleMouseUp = e => e.preventDefault();
+      const handleWheel = e => e.currentTarget.blur();
+      return (
+        <div className={"relative " + className}>
+          <input type="number" className="mt-1 w-full p-2 border rounded-xl pr-10 appearance-none"
+                 value={value} onChange={e=> onChange(asInt(e.target.value))}
+                 onFocus={handleFocus} onClick={handleClick} onMouseUp={handleMouseUp} onWheel={handleWheel} />
+          <div className="absolute right-1 top-1 bottom-1 flex flex-col">
+            <button type="button" className="flex-1 px-2 rounded-lg text-xs hover:bg-slate-100" onClick={inc} aria-label="Додати">▲</button>
+            <button type="button" className="flex-1 px-2 rounded-lg text-xs hover:bg-slate-100" onClick={dec} aria-label="Відняти">▼</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ===== Константи =====
+    const CATEGORIES = [
+      {id:'kitchen', label:'Кухні'},
+      {id:'wardrobes', label:'Шафи'},
+      {id:'closets', label:'Гардероби'},
+      {id:'bathrooms', label:'Санвузли'},
+      {id:'tables', label:'Столи'},
+      {id:'wallpanels', label:'Стінові панелі'},
+      {id:'custom', label:'Нестандартні вироби'},
+    ];
+
+    const HW_TYPES = [
+      { id:'slidingSystems', label:'Системи розсувних дверей (Revego, Hawa, Salice)' },
+      { id:'hiddenShelfBrackets', label:'Приховані полкотримачі' },
+      { id:'upperDrawerPullout', label:'Висувний механізм для верхніх шухляд' },
+      { id:'liftMechanisms', label:'Підіймальні механізми фасадів (Aventos тощо)' },
+      { id:'cargoPullout', label:'Карго / бутилочниця' },
+      { id:'cornerCarousel', label:'Поворотні каруселі (кутові)' },
+      { id:'foldingFronts', label:'ветиляція' },
+      { id:'heatingVent', label:'додаткові каринизи' },
+      { id:'innerDrawers', label:'Внутрішні шухляди' },
+      { id:'otherSpecial', label:'Інші спецмеханізми' },
+      { id:'otherSpecial', label:'Інші' },
+    ];
+
+    // ===== Математика =====
+    function computeBreakdownKitchen(input, rates){
+      const items=[];
+      const totalModules = asInt(input.lower)+asInt(input.upper)+asInt(input.mezz)+asInt(input.tall);
+
+      let base = 0;
+      if (rates.design.perModuleByGroup){
+        base += asInt(input.lower) * (rates.design.perModuleByGroup.lower||0);
+        base += asInt(input.upper) * (rates.design.perModuleByGroup.upper||0);
+        base += asInt(input.mezz)  * (rates.design.perModuleByGroup.mezz||0);
+        base += asInt(input.tall)  * (rates.design.perModuleByGroup.tall||0);
+      } else { base = totalModules * (rates.design.perModule||0); }
+      const kType = (rates.design.kitchenTypeCoeff||{})[input.kitchenType] ?? 1;
+      const kMeas = (rates.design.measurementCoeff||{})[input.measurement] ?? 1;
+      const kGeom = input.nonstdGeom ? (rates.design.nonstandardGeometryCoeff||1) : 1;
+      const extraMat = Math.max(0, asInt(input.carcassMaterials)-1);
+      const kMat = 1 + extraMat * (rates.design.carcassMaterialsExtraFactor||0);
+      const designCost = Math.round(base * kType * kMeas * kGeom * kMat);
+      if (designCost>0){
+        items.push({group:'Робота конструктора', label:`Підготовка файлів корпусів (модулів: ${totalModules})`, qty: totalModules, unit: Math.round(designCost/(totalModules||1)), sum: designCost});
+      }
+
+      const fUnit = t => ({
+        dsp: rates.facades.dsp||0,
+        paint: rates.facades.paint||0,
+        aluminum: rates.facades.aluminum||0,
+        film: rates.facades.film||0,
+        custom: rates.facades.customMilling||0,
+        rd: rates.facades.rdExtraPerElement||0,
+      })[t]||0;
+      const fLbl = t => ({dsp:'ДСП',paint:'Фарбовані',aluminum:'Алюмінієва рамка',film:'Плівкові',custom:'Фрезерування',rd:'R&D елементів'})[t]||'—';
+      const pushF = (title, count, type) => { const c=asInt(count); if(!c) return; const u=fUnit(type); if(!u) return; items.push({group:'Робота конструктора',label:`Фасади — ${title} (${fLbl(type)})`,qty:c,unit:u,sum:u*c}); };
+      pushF('Верхні', input.upper, input.facadesUpper);
+      pushF('Нижні', input.lower, input.facadesLower);
+      pushF('Антресолі', input.mezz, input.facadesMezz);
+
+      if (asInt(input.tall)>0){
+        if (!input.tallFacadesEnabled){ pushF('Пенали', input.tall, input.facadesTallSingle); }
+        else {
+          const t = input.facadesTallMulti||{dsp:0,paint:0,aluminum:0,film:0,custom:0,rd:0};
+          Object.entries(t).forEach(([k,v])=>{ const c=asInt(v); if(!c) return; const u=fUnit(k); if(!u) return; items.push({group:'Робота конструктора',label:`Фасади — Пенали (${fLbl(k)})`,qty:c,unit:u,sum:u*c}); });
+        }
+      }
+
+      if (asInt(input.nonstdCount)>0){
+        const mult = (rates.nonstandardElements.materialMultiplier||{})[input.nonstdMaterial] ?? 1;
+        const unit = Math.round((rates.nonstandardElements.basePerElement||0) * mult);
+        items.push({group:'Робота конструктора',label:`Нестандартні елементи (${input.nonstdMaterial})`,qty:asInt(input.nonstdCount),unit,sum:unit*asInt(input.nonstdCount)});
+      }
+
+      if (asInt(input.lightStandardCount)>0){ const u=rates.lighting.standardPerPiece||0; const q=asInt(input.lightStandardCount); items.push({group:'Робота конструктора',label:'Підсвітка — стандартна (шт.)',qty:q,unit:u,sum:u*q}); }
+      if (asInt(input.lightPlinthCount)>0){ const u=rates.lighting.plinthPerPiece||0; const q=asInt(input.lightPlinthCount); items.push({group:'Робота конструктора',label:'Підсвітка — цокльна (шт.)',qty:q,unit:u,sum:u*q}); }
+      if (asInt(input.lightInCabsCount)>0){ const u=rates.lighting.inCabinetPerCabinet||0; const q=asInt(input.lightInCabsCount); items.push({group:'Робота конструктора',label:'Підсвітка — у тумбах (шт.)',qty:q,unit:u,sum:u*q}); }
+
+      const handleUnit = ({gola:rates.handles.golaPerModule,edge:rates.handles.edgePerModule,surface:rates.handles.surfacePerModule,none:0})[input.handle]||0;
+      if (totalModules>0 && handleUnit>0){ items.push({group:'Робота конструктора',label:'Фурнітура — ручки (за модуль)',qty:totalModules,unit:handleUnit,sum:totalModules*handleUnit}); }
+
+      if (asInt(input.appliances)>0){ const u=rates.appliances.perItem||0; const q=asInt(input.appliances); items.push({group:'Робота конструктора',label:'Вбудована техніка (шт.)',qty:q,unit:u,sum:u*q}); }
+
+      if (input.nonstdHardwareEnabled){
+        const priceMap = rates.nonstandardHardwarePricesById || {};
+        (HW_TYPES||[]).forEach(t => {
+          const q = asInt((input.hwTypesQty||{})[t.id]);
+          const price = asNum(priceMap[t.id] || 0);
+          if(q>0 && price>0) items.push({group:'Нестандартна фурнітура',label:`${t.label} (шт.)`,qty:q,unit:price,sum:q*price});
+        });
+      }
+
+      if (input.hasTop && asInt(input.topLen)>0){
+        const u0 = (rates.countertop.perMeter||{})[input.topMat]||0;
+        const kShape = (rates.countertop.shapeCoeff||{})[input.topShape]||1;
+        const unit = Math.round(u0*kShape); const qty = asInt(input.topLen);
+        items.push({group:'Робота конструктора',label:`Стільниця (${input.topMat}, ${input.topShape}), м.п.`,qty,unit,sum:unit*qty});
+      }
+
+      if (input.hasSplash && asInt(input.splashLen)>0){
+        const u0b = (rates.backsplash.perMeter||{})[input.splashMat]||0;
+        const kB = (rates.backsplash.shapeCoeff||{})[input.splashShape]||1;
+        const unit = Math.round(u0b*kB); const qty = asInt(input.splashLen);
+        items.push({group:'Робота конструктора',label:`Стінова панель (${input.splashMat}, ${input.splashShape}), м.п.`,qty,unit,sum:unit*qty});
+      }
+
+      const total = items.reduce((s,i)=>s+(i.sum||0),0);
+      const groupTotals = items.reduce((acc, it)=>{ acc[it.group] = (acc[it.group]||0) + it.sum; return acc; }, {});
+      return {items,total,groupTotals};
+    }
+
+    // ===== Компоненти =====
+    function Header({onOpenRates}){
+      return (
+        <header className="no-print bg-white shadow-sm border-b">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
+            <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAEbAnEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9U6KKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACk3UtNY0AG7HY1Tuta0+xOLm9gtz/01kVf5muI+InjiTTnOnafJtnxmWXrsyOAPf8Axry6SZ5ZC8rs8jdWZsn86/EeJvEuhk2KlgsHT9rOPxNuyv29T6XA5LPFU1VqS5U9u59GWupWt6pNvcRzjrmNg38qsbvY1832d5Pp86zW0zwSr0eM4NeyeAvFx8SWLpcbVvYcCTbwGHZgM16HCfiFhuIqywdeHs6z27PyRlmGUVMHH2kXzROtzRSUor9dPnxaKKKYBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFRyfyqSmMOfaplqrAfO+uTPca5fyyHLNM55/3jx+HT8Ko9a6Xx9oMmjeIZ5NhFvcsZI26gknJH1zn8xXNZDciv89s9wtfB5niKOJVpqT/ABd7n69hKkKtGEobWQvPeuo+G1y9v4utlXpKrIw9RtJ/mP1rl+PWvQPhPockl9JqcikRRjy4892PUj8P517fBeFxGKz7CrDp3jK7fZLdnLmlSFPCVObqrHqhPBpy96TG4U5a/vA/KxaKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKa3HNAC5oz+FN+9yOadikAZozSbaM4oAWik3D1oWgB1FFFMAooooAKSlprdaAF3UZpPejtSAXNLTdtByKAHU1qBQevSmBR1fR7XXLNra7iEsZ6diD6g9jXnt98H5/MY2d8pTsJgQR+I6/lXqHakX8a+SznhXKc+kp46jeS6rR/ed+Gx1fC/wpWR5zo/whSOYPqN35yj/AJZQjaD9T1r0CzsorC3SGCNYo0GFVRwBU/50jVvk/DmW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L6V4+R8o5/CkzuG4Hce/ft/Kjua/qXA4WOCw8MPTWkUl/wAE/lfG4qWNxE8RN6ydxKM9v8ilz2Fdz8FfhvP8VPiTo/h9IpHtZpRJeugP7u2U5kJPbI+UE/xMvrWuJrwwtGdao9Iq7MsPQnia0aNNaydkfbn7F/wz/wCEH+FMWr3UHlaprzi8cMOVgAIhX6bSX/7aGvoNagsbWGxtIba3jWKCFBGkaDAVQMAD2FWK/lvHYqeOxM8RPeTuf1Nl+EjgcLTw0PsoWiiiuE9AKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigArJ8SeFtJ8Xae9hrOnWuqWTjmC7iWRfTIBHB68itaiqjJxalF2aJlGM4uMldM+Svih+wZo2qLLd+C9SfR7n7wsb5mlt/orffT8d30r5l8T/s2/EnwrdvBP4R1G9VTgT6XCbuNx6jywSPxANfqfRX2uB4uzHBx5JtVF/e/zPh8fwfl2MlzwvTfl/kfl94P/AGWfiT4xuo4l8OXGkQMfmudWH2dEBI5Kt85/BTX3V8B/gDo/wS0F4bZxf6zcgfa9SkQBpMdEUfwoM9Px+nq9FcWa8SY3No+znaMOy/U7Mp4ZweUz9rC8p92NCn1paWivlT64KKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAP/Z" alt="VIYAR" className="h-12 w-auto" />
+            
+          </div>
+        </header>
+      );
+    }
+
+    function CategoryTabs({active, setActive}){
+      return (
+        <div className="flex flex-wrap gap-2">
+          {CATEGORIES.map(cat => (
+            <button key={cat.id}
+              className={`px-3 py-2 rounded-xl border ${active===cat.id ? 'bg-sky-600 text-white border-sky-600' : 'bg-white hover:bg-sky-50'}`}
+              onClick={()=>setActive(cat.id)}>{cat.label}</button>
+          ))}
+        </div>
+      );
+    }
+
+    function HardwareCard({meta, qty, setQty, unitPrice, currency}){
+      return (
+        <div className="border rounded-lg p-3 bg-white">
+          <label className="inline-flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={!!(qty>0)} onChange={e=> setQty(e.target.checked ? (qty>0 ? qty : 1) : 0)} />
+            <span className="text-sm font-medium leading-5">{meta.label}</span>
+          </label>
+          <div className="mt-2 flex items-center gap-3">
+            <StepperInput className="w-28" value={qty||0} onChange={v=> setQty(Math.max(0, asInt(v)))} />
+            <div className="ml-auto text-xs text-slate-500 whitespace-nowrap">Ціна: {fmt(unitPrice||0, currency)}</div>
+          </div>
+        </div>
+      );
+    }
+
+    function KitchenForm({state, dispatch, ratesKitchen, currency}){
+      const s = state;
+      const setF = (key) => (v) => dispatch({type:'set', key, value:v});
+      return (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+          <div className="font-semibold">1) Основні параметри (Кухні)</div>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">Тип кухні
+              <select className="mt-1 w-full p-2 border rounded-xl" value={s.kitchenType} onChange={e=>setF('kitchenType')(e.target.value)}>
+                <option value="straight">Прямий</option><option value="l">Г-подібний</option><option value="u">П-подібний</option>
+              </select>
+            </label>
+            <label className="block text-sm">Заміри
+              <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+                <option value="no">Без заміру</option><option value="scan3d">3D-заміри</option><option value="hand">Від руки</option>
+              </select>
+            </label>
+            <label className="inline-flex items-center gap-2 col-span-2"><input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)}/><span>Нестандартна геометрія</span></label>
+            <label className="block text-sm col-span-2">Матеріали корпуса (шт.)
+              <StepperInput value={s.carcassMaterials} onChange={v=>setF('carcassMaterials')(Math.max(1, asInt(v)))} min={1} />
+            </label>
+            <label className="block text-sm">Нижні
+              <StepperInput value={s.lower} onChange={v=>setF('lower')(Math.max(0, asInt(v)))} min={0} />
+            </label>
+            <label className="block text-sm">Верхні
+              <StepperInput value={s.upper} onChange={v=>setF('upper')(Math.max(0, asInt(v)))} min={0} />
+            </label>
+            <label className="block text-sm">Антресолі
+              <StepperInput value={s.mezz} onChange={v=>setF('mezz')(Math.max(0, asInt(v)))} min={0} />
+            </label>
+            <label className="block text-sm">Пенали
+              <StepperInput value={s.tall} onChange={v=>setF('tall')(Math.max(0, asInt(v)))} min={0} />
+            </label>
+
+            <label className="block text-sm">Фасади верхніх
+              <select className="mt-1 w-full p-2 border rounded-xl" value={s.facadesUpper} onChange={e=>setF('facadesUpper')(e.target.value)}>
+                <option value="dsp">ДСП</option><option value="paint">Фарбовані</option><option value="aluminum">Алюмінієва рамка</option><option value="film">Плівкові</option><option value="custom">Фрезерування</option><option value="rd">R&amp;D елементів</option>
+              </select>
+            </label>
+            <label className="block text см">Фасади нижніх
+              <select className="mt-1 w-full p-2 border rounded-xl" value={s.facadesLower} onChange={e=>setF('facadesLower')(e.target.value)}>
+                <option value="dsp">ДСП</option><option value="paint">Фарбовані</option><option value="aluminum">Алюмінієва рамка</option><option value="film">Плівкові</option><option value="custom">Фрезерування</option><option value="rd">R&amp;D елементів</option>
+              </select>
+            </label>
+            <label className="block text-sm">Фасади антресолей
+              <select className="mt-1 w-full p-2 border rounded-xl" value={s.facadesMezz} onChange={e=>setF('facadesMezz')(e.target.value)}>
+                <option value="dsp">ДСП</option><option value="paint">Фарбовані</option><option value="aluminum">Алюмінієва рамка</option><option value="film">Плівкові</option><option value="custom">Фрезерування</option><option value="rd">R&amp;D елементів</option>
+              </select>
+            </label>
+
+            <div className="col-span-2 grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+              <div className="md:col-span-3">
+                <label className="block text-sm">Фасади пеналів (один тип)
+                  <select className="mt-1 w-full p-2 border rounded-xl" value={s.facadesTallSingle} onChange={e=>setF('facadesTallSingle')(e.target.value)}>
+                    <option value="dsp">ДСП</option><option value="paint">Фарбовані</option><option value="aluminum">Алюмінієва рамка</option><option value="film">Плівкові</option><option value="custom">Фрезерування</option><option value="rd">R&amp;D елементів</option>
+                  </select>
+                </label>
+              </div>
+              <label className="md:col-span-2 inline-flex items-center gap-2 text-sm pt-6"><input type="checkbox" checked={!!s.tallFacadesEnabled} onChange={e=>setF('tallFacadesEnabled')(!!e.target.checked)}/><span>Декілька типів фасадів</span></label>
+            </div>
+
+            {s.tallFacadesEnabled && (
+              <div className="col-span-2 border rounded-xl p-3 bg-slate-50">
+                <div className="text-sm font-medium mb-2">Розподіл фасадів пеналів за типами</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                  {['dsp','paint','aluminum','film','custom'].map(k=> (
+                    <label key={k} className="block">{({dsp:'ДСП',paint:'Фарбовані',aluminum:'Алюмінієва рамка',film:'Плівкові',custom:'Фрезерування'})[k]}
+                      <StepperInput value={s.facadesTallMulti[k]} onChange={v=>setF('facadesTallMulti')({...s.facadesTallMulti, [k]:Math.max(0, asInt(v))})} />
+                    </label>
+                  ))}
+                  <label className="block">R&amp;D елементів
+                    <StepperInput value={s.facadesTallMulti.rd} onChange={v=>setF('facadesTallMulti')({...s.facadesTallMulti, rd:Math.max(0, asInt(v))})} />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+            <div className="font-semibold">2) Додаткові елементи</div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <label className="block">Нестандартні елементи (шт.)
+                <StepperInput value={s.nonstdCount} onChange={v=>setF('nonstdCount')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">Матеріал нестандартних
+                <select className="mt-1 w-full p-2 border rounded-xl" value={s.nonstdMaterial} onChange={e=>setF('nonstdMaterial')(e.target.value)}>
+                  <option value="dsp">ДСП</option><option value="mdf_paint">МДФ фарба</option><option value="glass">Скло</option><option value="metal">Метал</option><option value="other">Інше</option>
+                </select>
+              </label>
+              <label className="block">Вбудована техніка (шт.)
+                <StepperInput value={s.appliances} onChange={v=>setF('appliances')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">Ручки
+                <select className="mt-1 w-full p-2 border rounded-xl" value={s.handle} onChange={e=>setF('handle')(e.target.value)}>
+                  <option value="none">Без ручок</option><option value="gola">Gola</option><option value="edge">Торцеві</option><option value="surface">На площині</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="pt-2 space-y-2">
+              <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!s.nonstdHardwareEnabled} onChange={e=>setF('nonstdHardwareEnabled')(!!e.target.checked)}/><span>Нестандартна фурнітура</span></label>
+              {s.nonstdHardwareEnabled && (
+                <div className="border rounded-xl p-3 bg-slate-50">
+                  <div className="text-sm text-slate-600 mb-2">Виберіть тип(и) і кількість, шт.</div>
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                    {HW_TYPES.map(meta=> (
+                      <HardwareCard key={meta.id} meta={meta} qty={s.hwTypesQty[meta.id]||0} setQty={(val)=>setF('hwTypesQty')({...s.hwTypesQty, [meta.id]:val})} unitPrice={ratesKitchen?.nonstandardHardwarePricesById?.[meta.id]||0} currency={currency} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="font-semibold pt-2">Стільниця</div>
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!s.hasTop} onChange={e=>setF('hasTop')(!!e.target.checked)}/><span>Є стільниця</span></label>
+            {s.hasTop && (
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <label className="block">Довжина, м.п. (цілі)
+                  <StepperInput value={s.topLen} onChange={v=>setF('topLen')(Math.max(0, asInt(v)))} />
+                </label>
+                <label className="block">Матеріал
+                  <select className="mt-1 w-full p-2 border rounded-xl" value={s.topMat} onChange={e=>setF('topMat')(e.target.value)}>
+                    <option value="ldsp">Ламінована</option><option value="stone">Камінь</option><option value="quartz">Кварц</option><option value="acrylic">Акрил</option><option value="wood">Дерево</option>
+                  </select>
+                </label>
+                <label className="block">Форма
+                  <select className="mt-1 w-full p-2 border rounded-xl" value={s.topShape} onChange={e=>setF('topShape')(e.target.value)}>
+                    <option value="straight">Пряма</option><option value="l">Г-подібна</option><option value="u">П-подібна</option>
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <div className="font-semibold pt-2">Стінова панель</div>
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!s.hasSplash} onChange={e=>setF('hasSplash')(!!e.target.checked)}/><span>Є стінова панель</span></label>
+            {s.hasSplash && (
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <label className="block">Довжина, м.п. (цілі)
+                  <StepperInput value={s.splashLen} onChange={v=>setF('splashLen')(Math.max(0, asInt(v)))} />
+                </label>
+                <label className="block">Матеріал
+                  <select className="mt-1 w-full p-2 border rounded-xl" value={s.splashMat} onChange={e=>setF('splashMat')(e.target.value)}>
+                    <option value="ldsp">Ламінована</option><option value="stone">Камінь</option><option value="quartz">Кварц</option><option value="acrylic">Акрил</option><option value="wood">Дерево</option>
+                  </select>
+                </label>
+                <label className="block">Форма
+                  <select className="mt-1 w-full p-2 border rounded-xl" value={s.splashShape} onChange={e=>setF('splashShape')(e.target.value)}>
+                    <option value="straight">Пряма</option><option value="l">Г-подібна</option><option value="u">П-подібна</option>
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <div className="font-semibold pt-2">Підсвітка (шт.)</div>
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <label className="block">Стандартна (шт.)
+                <StepperInput value={s.lightStandardCount} onChange={v=>setF('lightStandardCount')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">Цокльна (шт.)
+                <StepperInput value={s.lightPlinthCount} onChange={v=>setF('lightPlinthCount')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">У тумбах (шт.)
+                <StepperInput value={s.lightInCabsCount} onChange={v=>setF('lightInCabsCount')(Math.max(0, asInt(v)))} />
+              </label>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function KitchenEstimate({breakdown, currency, onClear}){
+      const subtotal = breakdown.total;
+      return (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+            <div className="font-semibold">Кошторис (Кухні)</div>
+            
+          </div>
+
+          <div className="overflow-x-auto max-h-[60vh]">
+            <table className="min-w-full text-sm">
+              <thead className="sticky top-0 bg-white shadow-sm">
+                <tr className="text-left text-slate-600"><th className="py-2 pr-2">Група</th><th className="py-2 pr-2">Позиція</th><th className="py-2 pr-2">К-сть</th><th className="py-2 pr-2">Ставка</th><th className="py-2 pr-2 sticky right-0 bg-white">Сума</th></tr>
+              </thead>
+              <tbody>
+                {breakdown.items.length===0? (<tr><td colSpan="5" className="py-4 text-slate-500">Додайте параметри для розрахунку…</td></tr>) : (
+                  breakdown.items.map((it,i)=> (
+                    <tr key={i} className="border-t odd:bg-slate-50/40"><td className="py-2 pr-2 whitespace-nowrap">{it.group}</td><td className="py-2 pr-2">{it.label}</td><td className="py-2 pr-2">{it.qty}</td><td className="py-2 pr-2 whitespace-nowrap">{fmt(it.unit, currency)}</td><td className="py-2 pr-2 whitespace-nowrap font-medium">{fmt(it.sum, currency)}</td></tr>
+                  ))
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 text-lg"><td colSpan="4" className="py-3 text-right font-semibold">Разом</td><td className="py-3 font-bold">{fmt(subtotal, currency)}</td></tr>
+              </tfoot>
+            </table>
+          </div>
+
+          
+          <div className="no-print flex items-center justify-between gap-3">
+            <button className="px-3 py-2 rounded-xl bg-sky-600 text-white hover:bg-sky-700" onClick={onClear}>Скинути розділ «Кухні»</button>
+            <div className="text-right">
+              <div className="text-sm text-slate-500">Разом</div>
+              <div className="text-2xl font-bold">{fmt(subtotal, currency)}</div>
+            </div>
+          </div>
+
+        </div>
+      );
+    }
+
+    function RatesModal({ open, onClose, rates, setRates }){
+  const { useState, useEffect } = React;
+
+  const PRODUCT_TABS = [
+    { id: 'kitchen',  label: 'Кухні' },
+    { id: 'wardrobe', label: 'Шафи' },
+    { id: 'closet',   label: 'Гардероби' },
+    { id: 'bathroom', label: 'Санвузли' },
+    { id: 'table',    label: 'Столи' },
+    { id: 'wallpanel',label: 'Стінові панелі' },
+    { id: 'custom',   label: 'Нестандартні' },
+  ];
+
+  // Deep-clone helper
+  const clone = (o)=> JSON.parse(JSON.stringify(o||{}));
+  const getByPath = (obj, path) => path.split('.').reduce((o,k)=> (o ? o[k] : undefined), obj);
+  const setByPath = (obj, path, val) => {
+    const segs = path.split('.'); const last = segs.pop();
+    const tgt = segs.reduce((o,k)=> (o[k]==null ? (o[k]={}) : o[k]), obj);
+    tgt[last] = val;
+    return obj;
+  };
+
+  // Initial state for tab + draft
+  const [ratesTab, setRatesTab] = useState('kitchen');
+  const ensureAll = (r) => {
+    const res = clone(r||{});
+    ['kitchen','wardrobe','closet','bathroom','table','wallpanel','custom'].forEach(k=>{
+      if(!res[k]) res[k] = clone(DEFAULT_RATES[k]||{});
+    });
+    return res;
+  };
+  const [draft, setDraft] = useState(()=> ensureAll(rates));
+
+  useEffect(()=>{
+    if(open){
+      setDraft(ensureAll(rates));
+    }
+  }, [open, rates]);
+
+  const updateDraft = (path, v) => {
+    setDraft(prev => {
+      const nx = clone(prev);
+      setByPath(nx, path, v);
+      return nx;
+    });
+  };
+
+  const resetCurrent = () => {
+    setDraft(prev => {
+      const nx = clone(prev);
+      nx[ratesTab] = clone(DEFAULT_RATES[ratesTab] || {});
+      return nx;
+    });
+  };
+
+  const apply = () => {
+    setRates(clone(draft));
+    onClose && onClose();
+  };
+
+  if(!open) return null;
+
+  const TabButton = ({t}) => (
+    <button
+      className={"px-3 py-1 rounded-xl border mr-2 mb-2 " + (ratesTab===t.id ? "bg-slate-900 text-white border-slate-900" : "bg-white")}
+      onClick={()=> setRatesTab(t.id)}>
+      {t.label}
+    </button>
+  );
+
+  const Num = ({label, step="1", path}) => (
+    <label className="block text-sm">{label}
+      <SoftNumberInput2 step={step} value={getByPath(draft, path) ?? 0} onChange={v=>updateDraft(path, v)} />
+    </label>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl">
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <div className="text-lg font-semibold">Редагування тарифів</div>
+          <div className="space-x-2">
+            <button className="px-3 py-1 rounded-xl bg-slate-200" onClick={onClose}>Закрити</button>
+            <button className="px-3 py-1 rounded-xl bg-rose-100 text-rose-700" onClick={resetCurrent}>Скинути</button>
+            <button className="px-3 py-1 rounded-xl bg-emerald-600 text-white" onClick={apply}>Застосувати</button>
+          </div>
+        </div>
+
+        <div className="px-4 py-3 border-b flex flex-wrap">
+          {PRODUCT_TABS.map(t => <TabButton key={t.id} t={t} />)}
+        </div>
+
+        {/* КУХНІ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='kitchen' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Кухні: ставки</div>
+              <Num label="Робота конструктора за модуль (₴/шт.)" path="kitchen.design.perModule" />
+              <div className="font-semibold mt-4 mb-2">Фасади — ставки (₴/шт.)</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Num label="ДСП"       path="kitchen.facades.dsp" />
+                <Num label="Фарбовані" path="kitchen.facades.paint" />
+                <Num label="Алюм. рамка" path="kitchen.facades.aluminum" />
+                <Num label="Індивідуальне фрезерування" path="kitchen.facades.customMilling" />
+                <Num label="R&D елемент (₴/ел.)" path="kitchen.facades.rdExtraPerElement" />
+              </div>
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Коефіцієнти</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Num label="Г‑подібна (L)" step="0.01" path="kitchen.shapeCoeff.l" />
+                <Num label="П‑подібна (U)" step="0.01" path="kitchen.shapeCoeff.u" />
+                <Num label="Нестандартна геометрія" step="0.01" path="kitchen.nonstandardGeometryCoeff" />
+                <Num label="Заміри — 3D" step="0.01" path="kitchen.measurementCoeff.scan3d" />
+                <Num label="Заміри — від руки" step="0.01" path="kitchen.measurementCoeff.hand" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ШАФИ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='wardrobe' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Шафи: базові ставки</div>
+              <Num label="Секція (₴/шт.)" path="wardrobe.perSection" />
+              <Num label="Ящик (₴/шт.)" path="wardrobe.perDrawer" />
+              <Num label="Труба (₴/шт.)" path="wardrobe.perRod" />
+              <Num label="Аксесуар (₴/шт.)" path="wardrobe.perAccessory" />
+              <Num label="Розсувні двері (₴/шт.)" path="wardrobe.slidingDoor" />
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Фасади — ставки (₴/шт.)</div>
+              <div className="grid md:grid-cols-2 gap-2">
+                <Num label="ДСП" path="wardrobe.facades.dsp" />
+                <Num label="Фарбовані" path="wardrobe.facades.paint" />
+                <Num label="Алюм. рамка" path="wardrobe.facades.aluminum" />
+                <Num label="Індивідуальне фрезерування" path="wardrobe.facades.customMilling" />
+                <Num label="R&D елемент (₴/ел.)" path="wardrobe.facades.rdExtraPerElement" />
+              </div>
+              <div className="font-semibold mt-4 mb-2">Коефіцієнти</div>
+              <div className="grid md:grid-cols-2 gap-2">
+                <Num label="Г‑подібна (L)" step="0.01" path="wardrobe.shapeCoeff.l" />
+                <Num label="П‑подібна (U)" step="0.01" path="wardrobe.shapeCoeff.u" />
+                <Num label="Нестандартна геометрія" step="0.01" path="wardrobe.nonstandardGeometryCoeff" />
+              </div>
+              <div className="font-semibold mt-4 mb-2">Заміри (коеф.)</div>
+              <div className="grid md:grid-cols-3 gap-2">
+                <Num label="Без заміру" step="0.01" path="wardrobe.measurementCoeff.no" />
+                <Num label="3D-замір" step="0.01" path="wardrobe.measurementCoeff.scan3d" />
+                <Num label="Від руки" step="0.01" path="wardrobe.measurementCoeff.hand" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ГАРДЕРОБИ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='closet' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Гардероби: базові ставки</div>
+              <Num label="Пройом (секція) (₴/шт.)" path="closet.perSection" />
+              <Num label="Ящик (₴/шт.)" path="closet.perDrawer" />
+              <Num label="Труба (₴/шт.)" path="closet.perRod" />
+              <Num label="Аксесуар (₴/шт.)" path="closet.perAccessory" />
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Коефіцієнти</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Num label="Г‑подібна (L)" step="0.01" path="closet.shapeCoeff.l" />
+                <Num label="П‑подібна (U)" step="0.01" path="closet.shapeCoeff.u" />
+                <Num label="Нестандартна геометрія" step="0.01" path="closet.nonstandardGeometryCoeff" />
+                <Num label="Заміри — 3D" step="0.01" path="closet.measurementCoeff.scan3d" />
+                <Num label="Заміри — від руки" step="0.01" path="closet.measurementCoeff.hand" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* САНВУЗЛИ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='bathroom' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Санвузли</div>
+              <Num label="Виріб (₴/шт.)" path="bathroom.perPiece" />
+              <Num label="Нестандартна геометрія" step="0.01" path="bathroom.nonstandardGeometryCoeff" />
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Заміри (коеф.)</div>
+              <div className="grid grid-cols-3 gap-2">
+                <Num label="Без заміру" step="0.01" path="bathroom.measurementCoeff.no" />
+                <Num label="3D-замір" step="0.01" path="bathroom.measurementCoeff.scan3d" />
+                <Num label="Від руки" step="0.01" path="bathroom.measurementCoeff.hand" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* СТОЛИ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='table' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Столи</div>
+              <Num label="Виріб (₴/шт.)" path="table.perPiece" />
+              <Num label="Кромка (₴/пог.м)" path="table.edgeWork" />
+              <Num label="Виріз (₴/шт.)" path="table.cutout" />
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Заміри (коеф.)</div>
+              <div className="grid grid-cols-3 gap-2">
+                <Num label="Без заміру" step="0.01" path="table.measurementCoeff.no" />
+                <Num label="3D-замір" step="0.01" path="table.measurementCoeff.scan3d" />
+                <Num label="Від руки" step="0.01" path="table.measurementCoeff.hand" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* СТІНОВІ ПАНЕЛІ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='wallpanel' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Стінові панелі</div>
+              <Num label="₴/м²" path="wallpanel.perSquareMeter" />
+              <Num label="₴/шт." path="wallpanel.perPiece" />
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Заміри (коеф.)</div>
+              <div className="grid grid-cols-3 gap-2">
+                <Num label="Без заміру" step="0.01" path="wallpanel.measurementCoeff.no" />
+                <Num label="3D-замір" step="0.01" path="wallpanel.measurementCoeff.scan3d" />
+                <Num label="Від руки" step="0.01" path="wallpanel.measurementCoeff.hand" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* НЕСТАНДАРТНІ */}
+        <div className="p-4 overflow-y-auto overscroll-contain" style={{display: ratesTab==='custom' ? 'block' : 'none', maxHeight:'80vh', WebkitOverflowScrolling:'touch'}}>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Нестандартні: ставки</div>
+              <Num label="Базова ставка (₴/ел.)" path="custom.basePerElement" />
+            </div>
+            <div className="rounded-2xl border p-3">
+              <div className="font-semibold mb-2">Коефіцієнти</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Num label="Матеріал — MDF/фарба" step="0.01" path="custom.materialMultiplier.mdf_paint" />
+                <Num label="Матеріал — Скло" step="0.01" path="custom.materialMultiplier.glass" />
+                <Num label="Матеріал — Метал" step="0.01" path="custom.materialMultiplier.metal" />
+                <Num label="Матеріал — Інше" step="0.01" path="custom.materialMultiplier.other" />
+                <Num label="Складність — середня" step="0.01" path="custom.complexityCoeff.medium" />
+                <Num label="Складність — висока" step="0.01" path="custom.complexityCoeff.hard" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+    // ===== App =====
+    const DEFAULT_HW_PRICES = HW_TYPES.reduce((acc,t)=>{ acc[t.id]=0; return acc; }, {});
+    const DEFAULT_RATES = {
+  kitchen: {
+    design: { perModule: 250 },
+    facades: { dsp: 120, paint: 220, aluminum: 180, customMilling: 300, rdExtraPerElement: 150 },
+    measurementCoeff: { no: 1, scan3d: 1.1, hand: 1.25 },
+    nonstandardGeometryCoeff: 1.15,
+    shapeCoeff: { straight: 1, l: 1.05, u: 1.08 }
+  },
+
+  wardrobe: {
+    perSection: 200,
+    perDrawer: 80,
+    perRod: 40,
+    perAccessory: 60,
+    slidingDoor: 120,
+    facades: { dsp: 100, paint: 200, aluminum: 300, customMilling: 300, rdExtraPerElement: 400 },
+    shapeCoeff: { l: 1.25, u: 1.5 },
+    nonstandardGeometryCoeff: 1.2,
+    measurementCoeff: { no: 1, scan3d: 1.1, hand: 1.25 }
+  },
+
+  closet: {
+    perSection: 180,
+    perDrawer: 70,
+    perRod: 35,
+    perAccessory: 50,
+    shapeCoeff: { l: 1.2, u: 1.35 },
+    nonstandardGeometryCoeff: 1.12,
+    measurementCoeff: { no: 1, scan3d: 1.1, hand: 1.25 }
+  },
+
+  bathroom: {
+    perPiece: 150,
+    measurementCoeff: { no: 1, scan3d: 1.1, hand: 1.25 },
+    nonstandardGeometryCoeff: 1.1
+  },
+
+  table: {
+    perPiece: 120,
+    edgeWork: 60,
+    cutout: 40,
+    measurementCoeff: { no: 1, scan3d: 1.1, hand: 1.25 }
+  },
+
+  wallpanel: {
+    perSquareMeter: 180,
+    perPiece: 80,
+    measurementCoeff: { no: 1, scan3d: 1.1, hand: 1.25 }
+  },
+
+  custom: {
+    basePerElement: 300,
+    materialMultiplier: { mdf_paint: 1.2, glass: 1.4, metal: 1.6, other: 1.1 },
+    complexityCoeff: { medium: 1.2, hard: 1.5 }
+  }
+};;
+
+    
+function closetInitialState(){
+  return { sections:0, drawers:0, rods:0, accessories:0, shape:'straight', measurement:'no', nonstdGeom:false };
+}
+function bathroomInitialState(){
+  return { modules:0, drawers:0, doors:0, sinkCutouts:0, mirrorLED:0, shape:'straight', measurement:'no', nonstdGeom:false };
+}
+function tableInitialState(){
+  return { tables:0, mechanisms:0, drawers:0, shape:'rect', measurement:'no', nonstdGeom:false };
+}
+function wallpanelInitialState(){
+  return { area:0, cutouts:0, ledChannels:0, corners:0, measurement:'no', nonstdGeom:false };
+}
+function customInitialState(){
+  return { elements:0, material:'dsp', complexity:'simple', measurement:'no', nonstdGeom:false };
+}
+function kitchenInitialState(){
+      return {
+        kitchenType:'straight', measurement:'no', nonstdGeom:false, carcassMaterials:1,
+        lower:0, upper:0, mezz:0, tall:0,
+        facadesUpper:'dsp', facadesLower:'dsp', facadesMezz:'dsp',
+        facadesTallSingle:'dsp', tallFacadesEnabled:false, facadesTallMulti:{dsp:0,paint:0,aluminum:0,film:0,custom:0,rd:0},
+        nonstdCount:0, nonstdMaterial:'dsp',
+        lightStandardCount:0, lightPlinthCount:0, lightInCabsCount:0,
+        handle:'none', appliances:0,
+        nonstdHardwareEnabled:false, hwTypesQty:{},
+        hasTop:false, topMat:'ldsp', topShape:'straight', topLen:0,
+        hasSplash:false, splashMat:'ldsp', splashShape:'straight', splashLen:0,
+      };
+    }
+    function kitchenReducer(state, action){
+      switch(action.type){
+        case 'set': return {...state, [action.key]: action.value};
+        case 'bulk': return {...state, ...action.value};
+        case 'reset': return kitchenInitialState();
+        default: return state;
+      }
+    }
+
+    function computeBreakdownCloset(input, rates){
+  const r = (rates && rates.closet) ? rates.closet : (rates||{});
+  const perSection = Number(r.perSection)||0;
+  const perDrawer  = Number(r.perDrawer)||0;
+  const perRod     = Number(r.perRod)||0;
+  const perAcc     = Number(r.perAccessory)||0;
+  const meas = r.measurementCoeff || { no:1, hand:1, scan3d:1 };
+  const shape = r.shapeCoeff || { straight:1, l:1, u:1 };
+  const geom = Number(r.nonstandardGeometryCoeff)||1;
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  const items = [];
+  const sec=asInt(input?.sections), dr=asInt(input?.drawers), rd=asInt(input?.rods), ac=asInt(input?.accessories);
+  if(sec>0) items.push({label:'Пройоми (секції)', qty:sec, unit:perSection, sum:perSection*sec});
+  if(dr>0)  items.push({label:'Шухляди', qty:dr, unit:perDrawer, sum:perDrawer*dr});
+  if(rd>0)  items.push({label:'Труби (підвіси)', qty:rd, unit:perRod, sum:perRod*rd});
+  if(ac>0)  items.push({label:'Аксесуари', qty:ac, unit:perAcc, sum:perAcc*ac});
+  const kShape=Number((shape||{})[input?.shape||'straight'])||1;
+  const kGeom = input?.nonstdGeom ? geom : 1;
+  const kMeas = Number((meas||{})[input?.measurement||'no'])||1;
+  const base = items.reduce((s,i)=>s+(Number(i.sum)||0),0);
+  const total = Math.round(base*kShape*kGeom*kMeas);
+  return {items, total};
+}
+
+function computeBreakdownBathroom(input, rates){
+  const r = (rates && rates.bathroom) ? rates.bathroom : (rates||{});
+  const uMod=Number(r.perModule)||0, uDr=Number(r.perDrawer)||0, uDoor=Number(r.perDoor)||0, uCut=Number(r.perSinkCutout)||0, uLED=Number(r.perMirrorLED)||0;
+  const meas = r.measurementCoeff || { no:1, hand:1, scan3d:1 };
+  const shape= r.shapeCoeff || { straight:1, l:1, u:1 };
+  const geom = Number(r.nonstandardGeometryCoeff)||1;
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  const items=[];
+  const m=asInt(input?.modules), dr=asInt(input?.drawers), d=asInt(input?.doors), c=asInt(input?.sinkCutouts), led=asInt(input?.mirrorLED);
+  if(m>0) items.push({label:'Модулі', qty:m, unit:uMod, sum:uMod*m});
+  if(dr>0) items.push({label:'Шухляди', qty:dr, unit:uDr, sum:uDr*dr});
+  if(d>0) items.push({label:'Дверцята', qty:d, unit:uDoor, sum:uDoor*d});
+  if(c>0) items.push({label:'Вирізи під умивальник', qty:c, unit:uCut, sum:uCut*c});
+  if(led>0) items.push({label:'Дзеркала / LED модулі', qty:led, unit:uLED, sum:uLED*led});
+  const kShape=Number((shape||{})[input?.shape||'straight'])||1;
+  const kGeom = input?.nonstdGeom ? geom : 1;
+  const kMeas = Number((meas||{})[input?.measurement||'no'])||1;
+  const base = items.reduce((s,i)=>s+(Number(i.sum)||0),0);
+  const total = Math.round(base*kShape*kGeom*kMeas);
+  return {items, total};
+}
+
+function computeBreakdownTable(input, rates){
+  const r = (rates && rates.table) ? rates.table : (rates||{});
+  const uBase=Number(r.basePerTable)||0, uMech=Number(r.mechanismPerItem)||0, uDr=Number(r.drawerPerItem)||0;
+  const meas = r.measurementCoeff || { no:1, hand:1, scan3d:1 };
+  const shape= r.shapeCoeff || { rect:1, round:1.06, complex:1.15 };
+  const geom = Number(r.nonstandardGeometryCoeff)||1;
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  const items=[];
+  const cnt=asInt(input?.tables), mech=asInt(input?.mechanisms), dr=asInt(input?.drawers);
+  if(cnt>0)  items.push({label:'Базові столи', qty:cnt, unit:uBase, sum:uBase*cnt});
+  if(mech>0) items.push({label:'Механізми розкладання', qty:mech, unit:uMech, sum:uMech*mech});
+  if(dr>0)   items.push({label:'Шухляди', qty:dr, unit:uDr, sum:uDr*dr});
+  const kShape=Number((shape||{})[input?.shape||'rect'])||1;
+  const kGeom = input?.nonstdGeom ? geom : 1;
+  const kMeas = Number((meas||{})[input?.measurement||'no'])||1;
+  const base = items.reduce((s,i)=>s+(Number(i.sum)||0),0);
+  const total = Math.round(base*kShape*kGeom*kMeas);
+  return {items, total};
+}
+
+function computeBreakdownWallpanel(input, rates){
+  const r = (rates && rates.wallpanel) ? rates.wallpanel : (rates||{});
+  const uM2=Number(r.perSquareMeter)||0, uCut=Number(r.perCutout)||0, uLED=Number(r.perLEDChannel)||0, uCorner=Number(r.perCorner)||0;
+  const meas = r.measurementCoeff || { no:1, hand:1, scan3d:1 };
+  const geom = Number(r.nonstandardGeometryCoeff)||1;
+  const asNum = v => { const n = parseFloat(String(v).replace(',','.')); return Number.isFinite(n)?n:0; };
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  const items=[];
+  const a=Math.max(0, asNum(input?.area)), cuts=asInt(input?.cutouts), led=asInt(input?.ledChannels), corners=asInt(input?.corners);
+  if(a>0)     items.push({label:'Площа панелей (м²)', qty:a, unit:uM2, sum:Math.round(uM2*a)});
+  if(cuts>0)  items.push({label:'Вирізи (шт.)', qty:cuts, unit:uCut, sum:uCut*cuts});
+  if(led>0)   items.push({label:'LED-канали (шт.)', qty:led, unit:uLED, sum:uLED*led});
+  if(corners>0) items.push({label:'Кути/стики (шт.)', qty:corners, unit:uCorner, sum:uCorner*corners});
+  const kGeom = input?.nonstdGeom ? geom : 1;
+  const kMeas = Number((meas||{})[input?.measurement||'no'])||1;
+  const base = items.reduce((s,i)=>s+(Number(i.sum)||0),0);
+  const total = Math.round(base*kGeom*kMeas);
+  return {items, total};
+}
+
+function computeBreakdownCustom(input, rates){
+  const r = (rates && rates.custom) ? rates.custom : (rates||{});
+  const uBase=Number(r.basePerElement)||0;
+  const matMul=r.materialMultiplier||{dsp:1}, comp=r.complexityCoeff||{simple:1, medium:1.25, complex:1.5};
+  const meas = r.measurementCoeff || { no:1, hand:1, scan3d:1 };
+  const geom = Number(r.nonstandardGeometryCoeff)||1;
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  const items=[];
+  const el=asInt(input?.elements||0);
+  const mat=input?.material||'dsp';
+  const lvl=input?.complexity||'simple';
+  const u = Math.round(uBase * (Number(matMul[mat])||1) * (Number(comp[lvl])||1));
+  if(el>0) items.push({label:`Елементи (${mat}, ${lvl})`, qty:el, unit:u, sum:u*el});
+  const kGeom = input?.nonstdGeom ? geom : 1;
+  const kMeas = Number((meas||{})[input?.measurement||'no'])||1;
+  const base = items.reduce((s,i)=>s+(Number(i.sum)||0),0);
+  const total = Math.round(base*kGeom*kMeas);
+  return {items, total};
+}
+
+function App(){
+      // Завантаження з LocalStorage
+      const STORAGE_KEY = 'viyar_calc_v37b';
+      const [rates, setRates] = useState(() => {
+        try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const parsed=JSON.parse(raw); if(parsed?.rates) return parsed.rates; } }catch(e){}
+        return clone(DEFAULT_RATES);
+      });
+      const [kState, dispatchK] = useReducer(kitchenReducer, null, () => {
+        try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const parsed=JSON.parse(raw); if(parsed?.kitchen) return {...kitchenInitialState(), ...parsed.kitchen}; } }catch(e){}
+        return kitchenInitialState();
+      });
+      const [activeCat, setActiveCat] = useState('kitchen');
+      
+      const [wState, setWState] = useState({ sections:0, drawers:0, rods:0, accessories:0, shape:'straight', measurement:'no', nonstdGeom:false, facadeType:'swing', facadeSwingMaterial:'dsp', facadeSwingCount:0, facadeSwingRD:0, slidingDoors:0 });
+      const [clState, setClState] = useState(()=>{ try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const p=JSON.parse(raw); return {...closetInitialState(), ...(p.closet||{})}; } }catch(e){} return closetInitialState(); });
+      const [bState, setBState] = useState(()=>{ try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const p=JSON.parse(raw); return {...bathroomInitialState(), ...(p.bathroom||{})}; } }catch(e){} return bathroomInitialState(); });
+      const [tState, setTState]   = useState(()=>{ try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const p=JSON.parse(raw); return {...tableInitialState(), ...(p.table||{})}; } }catch(e){} return tableInitialState(); });
+      const [wpState, setWpState] = useState(()=>{ try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const p=JSON.parse(raw); return {...wallpanelInitialState(), ...(p.wallpanel||{})}; } }catch(e){} return wallpanelInitialState(); });
+      const [cstState, setCstState] = useState(()=>{ try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const p=JSON.parse(raw); return {...customInitialState(), ...(p.custom||{})}; } }catch(e){} return customInitialState(); });
+const [showRates, setShowRates] = useState(false);
+
+      // Автозбереження
+      useEffect(()=>{
+        try{ localStorage.setItem(STORAGE_KEY, JSON.stringify({ rates, kitchen: kState, wardrobe: wState, closet: clState, bathroom: bState, table: tState, wallpanel: wpState, custom: cstState })); }catch(e){}
+      }, [rates, kState]);
+
+      // Обчислення
+      const kitchenBreakdown = useMemo(() => computeBreakdownKitchen(kState, rates.kitchen), [kState, rates.kitchen]);
+
+      
+      const wardrobeBreakdown = useMemo(() => computeBreakdownWardrobe(wState, rates), [wState, rates]);
+      const closetBreakdown = useMemo(() => computeBreakdownCloset(clState, rates), [clState, rates]);
+      const bathroomBreakdown = useMemo(() => computeBreakdownBathroom(bState, rates), [bState, rates]);
+      const tableBreakdown = useMemo(() => computeBreakdownTable(tState, rates), [tState, rates]);
+      const wallpanelBreakdown = useMemo(() => computeBreakdownWallpanel(wpState, rates), [wpState, rates]);
+      const customBreakdown = useMemo(() => computeBreakdownCustom(cstState, rates), [cstState, rates]);
+const clearKitchen = () => {
+        if(!confirm('Скинути всі поля «Кухні» до нулів?')) return;
+        dispatchK({type:'reset'});
+      };
+
+      return (
+        <div className="min-h-screen">
+          <header className="no-print bg-white shadow-sm border-b">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
+              <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAEbAnEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9U6KKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACk3UtNY0AG7HY1Tuta0+xOLm9gtz/01kVf5muI+InjiTTnOnafJtnxmWXrsyOAPf8Axry6SZ5ZC8rs8jdWZsn86/EeJvEuhk2KlgsHT9rOPxNuyv29T6XA5LPFU1VqS5U9u59GWupWt6pNvcRzjrmNg38qsbvY1832d5Pp86zW0zwSr0eM4NeyeAvFx8SWLpcbVvYcCTbwGHZgM16HCfiFhuIqywdeHs6z27PyRlmGUVMHH2kXzROtzRSUor9dPnxaKKKYBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFRyfyqSmMOfaplqrAfO+uTPca5fyyHLNM55/3jx+HT8Ko9a6Xx9oMmjeIZ5NhFvcsZI26gknJH1zn8xXNZDciv89s9wtfB5niKOJVpqT/ABd7n69hKkKtGEobWQvPeuo+G1y9v4utlXpKrIw9RtJ/mP1rl+PWvQPhPockl9JqcikRRjy4892PUj8P517fBeFxGKz7CrDp3jK7fZLdnLmlSFPCVObqrHqhPBpy96TG4U5a/vA/KxaKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKa3HNAC5oz+FN+9yOadikAZozSbaM4oAWik3D1oWgB1FFFMAooooAKSlprdaAF3UZpPejtSAXNLTdtByKAHU1qBQevSmBR1fR7XXLNra7iEsZ6diD6g9jXnt98H5/MY2d8pTsJgQR+I6/lXqHakX8a+SznhXKc+kp46jeS6rR/ed+Gx1fC/wpWR5zo/whSOYPqN35yj/AJZQjaD9T1r0CzsorC3SGCNYo0GFVRwBU/50jVvk/DmW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L6V4+R8o5/CkzuG4Hce/ft/Kjua/qXA4WOCw8MPTWkUl/wAE/lfG4qWNxE8RN6ydxKM9v8ilz2Fdz8FfhvP8VPiTo/h9IpHtZpRJeugP7u2U5kJPbI+UE/xMvrWuJrwwtGdao9Iq7MsPQnia0aNNaydkfbn7F/wz/wCEH+FMWr3UHlaprzi8cMOVgAIhX6bSX/7aGvoNagsbWGxtIba3jWKCFBGkaDAVQMAD2FWK/lvHYqeOxM8RPeTuf1Nl+EjgcLTw0PsoWiiiuE9AKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigArJ8SeFtJ8Xae9hrOnWuqWTjmC7iWRfTIBHB68itaiqjJxalF2aJlGM4uMldM+Svih+wZo2qLLd+C9SfR7n7wsb5mlt/orffT8d30r5l8T/s2/EnwrdvBP4R1G9VTgT6XCbuNx6jywSPxANfqfRX2uB4uzHBx5JtVF/e/zPh8fwfl2MlzwvTfl/kfl94P/AGWfiT4xuo4l8OXGkQMfmudWH2dEBI5Kt85/BTX3V8B/gDo/wS0F4bZxf6zcgfa9SkQBpMdEUfwoM9Px+nq9FcWa8SY3No+znaMOy/U7Mp4ZweUz9rC8p92NCn1paWivlT64KKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAP/Z" alt="VIYAR" className="h-12 w-auto" />
+              <div className="ml-auto flex items-center gap-2">
+                <button className="px-3 py-2 rounded-lg bg-slate-100 border hover:bg-slate-200" onClick={()=>setShowRates(true)}>Тарифи</button>
+                <button className="px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black" onClick={()=>window.print()}>Друк</button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-7xl mx-auto px-4 py-4 space-y-4">
+            <div className="flex flex-wrap gap-2">
+              {CATEGORIES.map(cat => (
+                <button key={cat.id}
+                  className={`px-3 py-2 rounded-xl border ${activeCat===cat.id ? 'bg-sky-600 text-white border-sky-600' : 'bg-white hover:bg-sky-50'}`}
+                  onClick={()=>setActiveCat(cat.id)}>{cat.label}</button>
+              ))}
+            </div>
+
+            
+{activeCat==='kitchen' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <KitchenForm state={kState} dispatch={dispatchK} ratesKitchen={rates.kitchen} currency={rates.currency} />
+    <KitchenEstimate breakdown={kitchenBreakdown} currency={rates.currency} onClear={clearKitchen} />
+  </section>
+)}
+{activeCat==='wardrobes' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <WardrobeForm state={wState} setState={setWState} />
+    <WardrobeEstimate breakdown={wardrobeBreakdown} currency={rates.currency} />
+  </section>
+)}
+{activeCat==='closets' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <ClosetForm state={clState} setState={setClState} />
+    <ClosetEstimate breakdown={closetBreakdown} currency={rates.currency} />
+  </section>
+)}
+{activeCat==='bathrooms' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <BathroomForm state={bState} setState={setBState} />
+    <BathroomEstimate breakdown={bathroomBreakdown} currency={rates.currency} />
+  </section>
+)}
+{activeCat==='tables' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <TableForm state={tState} setState={setTState} />
+    <TableEstimate breakdown={tableBreakdown} currency={rates.currency} />
+  </section>
+)}
+{activeCat==='wallpanels' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <WallpanelForm state={wpState} setState={setWpState} />
+    <WallpanelEstimate breakdown={wallpanelBreakdown} currency={rates.currency} />
+  </section>
+)}
+{activeCat==='custom' && (
+  <section className="grid lg:grid-cols-2 gap-4">
+    <CustomForm state={cstState} setState={setCstState} />
+    <CustomEstimate breakdown={customBreakdown} currency={rates.currency} />
+  </section>
+)}
+</main>
+
+          <RatesModal open={showRates} onClose={()=>setShowRates(false)} rates={rates} setRates={setRates} />
+        </div>
+      );
+    }
+
+    // ===== Автотести =====
+    function runTests(){
+      const rates = {
+        design:{ perModuleByGroup:{lower:250,upper:250,mezz:250,tall:250}, kitchenTypeCoeff:{straight:1,l:1.06,u:1.12}, measurementCoeff:{no:1}, nonstandardGeometryCoeff:1, carcassMaterialsExtraFactor:0 },
+        facades:{paint:180},
+        appliances:{perItem:800},
+        countertop:{perMeter:{ldsp:900,quartz:2000}, shapeCoeff:{straight:1,l:1.05}},
+        backsplash:{perMeter:{ldsp:900}, shapeCoeff:{straight:1}},
+        lighting:{}, handles:{}, nonstandardElements:{}, nonstandardHardwarePricesById:{},
+      };
+      const c = (input) => computeBreakdownKitchen(input, rates).total;
+
+      console.assert(c({lower:1,upper:0,mezz:0,tall:0,kitchenType:'straight',measurement:'no',nonstdGeom:false,carcassMaterials:1})===250, 'Тест1 базовий модуль');
+      console.assert(c({lower:0,upper:2,mezz:0,tall:0,kitchenType:'straight',measurement:'no',nonstdGeom:false,carcassMaterials:1, facadesUpper:'paint'})===860, 'Тест2 фасади фарба');
+      console.assert(c({lower:0,upper:0,mezz:0,tall:0,kitchenType:'straight',measurement:'no',nonstdGeom:false,carcassMaterials:1, hasTop:true, topMat:'ldsp', topShape:'straight', topLen:2})===1800, 'Тест3 стільниця лдсп 2м');
+      console.assert(c({lower:0,upper:0,mezz:0,tall:1,kitchenType:'straight',measurement:'no',nonstdGeom:false,carcassMaterials:1, tallFacadesEnabled:true, facadesTallMulti:{paint:1}})===430, 'Тест5 пенал + фарба');
+      console.assert(c({lower:0,upper:0,mezz:0,tall:0,kitchenType:'straight',measurement:'no',nonstdGeom:false,carcassMaterials:1, hasTop:true, topMat:'quartz', topShape:'l', topLen:2})===4200, 'Тест6 кварц 2м L');
+      console.log('%cЛокальні тести пройдено','color:green');
+    }
+    runTests();
+
+    
+    /* === WARDROBES: compute + UI (stable, no deps) === */
+    function computeBreakdownWardrobe(input, rates){
+      const r = (rates && rates.wardrobe) ? rates.wardrobe : (rates||{});
+      const perSection   = Number(r.perSection)   || 0;
+      const perDrawer    = Number(r.perDrawer)    || 0;
+      const perRod       = Number(r.perRod)       || 0;
+      const perAccessory = Number(r.perAccessory) || 0;
+      const slidingDoor  = Number(r.slidingDoor)  || 0;
+
+      const meas = r.measurementCoeff || { no:1, hand:1, scan3d:1 };
+      const shape = r.shapeCoeff || { straight:1, l:1, u:1 };
+      const geomCoeff = Number(r.nonstandardGeometryCoeff) || 1;
+      const fac = r.facades || { dsp:0, paint:0, aluminum:0, customMilling:0, rdExtraPerElement:0 };
+
+      const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+      const items = [];
+
+      const sections = asInt(input?.sections);
+      const drawers  = asInt(input?.drawers);
+      const rods     = asInt(input?.rods);
+      const accs     = asInt(input?.accessories);
+
+      if(sections>0) items.push({label:'Секції (пройоми)', qty:sections, unit:perSection,   sum:perSection*sections});
+      if(drawers>0)  items.push({label:'Ящики',           qty:drawers,  unit:perDrawer,    sum:perDrawer*drawers});
+      if(rods>0)     items.push({label:'Труби для одягу', qty:rods,     unit:perRod,       sum:perRod*rods});
+      if(accs>0)     items.push({label:'Додаткові аксесуари', qty:accs, unit:perAccessory, sum:perAccessory*accs});
+
+      const type = input?.facadeType || 'swing';
+      if(type==='swing'){
+        const mat   = input?.facadeSwingMaterial || 'dsp';
+        const count = asInt(input?.facadeSwingCount);
+        const rdEl  = asInt(input?.facadeSwingRD);
+        const u = Number(fac[mat]) || 0;
+        if(count>0) items.push({label:`Фасади — розпашні (${mat})`, qty:count, unit:u, sum:u*count});
+        const rdU = Number(fac.rdExtraPerElement) || 0;
+        if(rdEl>0) items.push({label:'Фасади R&D (ел.)', qty:rdEl, unit:rdU, sum:rdU*rdEl});
+      } else if(type==='sliding'){
+        const doors = asInt(input?.slidingDoors);
+        const u = slidingDoor;
+        if(doors>0) items.push({label:'Фасади — розсувні двері', qty:doors, unit:u, sum:u*doors});
+      }
+
+
+
+      const kShape = Number((shape||{})[input?.shape || 'straight']) || 1;
+      const kGeom  = input?.nonstdGeom ? geomCoeff : 1;
+      const kMeas  = Number((meas||{})[input?.measurement || 'no']) || 1;
+
+      const baseTotal = items.reduce((s,i)=>s + (Number(i.sum)||0), 0);
+      const total = Math.round(baseTotal * kShape * kGeom * kMeas);
+      return { items, total };
+    }
+
+    function WardrobeForm({state, setState}){
+      const s = state, setF = k => v => setState(p=>({...p,[k]:v}));
+      const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+      return (
+        <div className="rounded-2xl border p-3 shadow-sm space-y-3 bg-white">
+          <div className="grid md:grid-cols-3 gap-3">
+            <div>
+              <div className="text-sm font-medium mb-2">Базові параметри</div>
+              <label className="block">Кількість пройомів (секцій)
+                <StepperInput value={s.sections} onChange={v=>setF('sections')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">Кількість ящиків
+                <StepperInput value={s.drawers} onChange={v=>setF('drawers')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">Кількість труб (підвіси)
+                <StepperInput value={s.rods} onChange={v=>setF('rods')(Math.max(0, asInt(v)))} />
+              </label>
+              <label className="block">Додаткові аксесуари (шт.)
+                <StepperInput value={s.accessories} onChange={v=>setF('accessories')(Math.max(0, asInt(v)))} />
+              </label>
+            </div>
+
+            <div>
+              <div className="text-sm font-medium mb-2">Умови та форма</div>
+              <label className="block">Форма шафи
+                <select className="mt-1 w-full p-2 border rounded-xl" value={s.shape} onChange={e=>setF('shape')(e.target.value)}>
+                  <option value="straight">Прямий</option>
+                  <option value="l">Г-подібний</option>
+                  <option value="u">П-подібний</option>
+                </select>
+              </label>
+              <label className="block">Заміри
+                <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+                  <option value="no">Без заміру (габарити)</option>
+                  <option value="hand">Заміри від руки</option>
+                  <option value="scan3d">3D-замір</option>
+                </select>
+              </label>
+              <label className="inline-flex items-center gap-2 mt-2">
+                <input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)} />
+                <span>Нестандартна геометрія приміщення</span>
+              </label>
+            </div>
+
+            <div>
+              <div className="text-sm font-medium mb-2">Фасади</div>
+              <label className="block">Тип фасадів
+                <select className="mt-1 w-full p-2 border rounded-xl" value={s.facadeType} onChange={e=>setF('facadeType')(e.target.value)}>
+                  <option value="swing">Розпашні</option>
+                  <option value="sliding">Розсувна система</option>
+                </select>
+              </label>
+
+              {s.facadeType==='swing' ? (
+                <div className="grid grid-cols-1 gap-2 mt-2">
+                  <label className="block">Матеріал розпашних фасадів
+                    <select className="mt-1 w-full p-2 border rounded-xl" value={s.facadeSwingMaterial} onChange={e=>setF('facadeSwingMaterial')(e.target.value)}>
+                      <option value="dsp">ДСП</option>
+                      <option value="paint">Фарбовані</option>
+                      <option value="aluminum">Алюмінієва рамка</option>
+                      <option value="custom">Індивідуальне фрезерування</option>
+                    </select>
+                  </label>
+                  <label className="block">Кількість фасадів (шт.)
+                    <StepperInput value={s.facadeSwingCount} onChange={v=>setF('facadeSwingCount')(Math.max(0, asInt(v)))} />
+                  </label>
+                  <label className="block">R&D (кількість елементів)
+                    <StepperInput value={s.facadeSwingRD} onChange={v=>setF('facadeSwingRD')(Math.max(0, asInt(v)))} />
+                  </label>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 mt-2">
+                  <label className="block">Кількість розсувних дверей
+                    <StepperInput value={s.slidingDoors} onChange={v=>setF('slidingDoors')(Math.max(0, asInt(v)))} />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function WardrobeEstimate({breakdown, currency}){
+  const rows = breakdown.items||[];
+  const fmt2 = (n, cur='UAH') => { const v = Number.isFinite(+n) ? +n : 0; try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; } };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div className="font-semibold">Кошторис (Шафи)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-white shadow-sm">
+            <tr className="text-left text-slate-600">
+              <th className="py-2 pr-2">Найменування</th>
+              <th className="py-2 pr-2">К-сть</th>
+              <th className="py-2 pr-2">Ставка</th>
+              <th className="py-2 pr-2">Сума</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((r,i)=>(
+              <tr key={i} className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+                <td className="py-2 pr-2">{r.label}</td>
+                <td className="py-2 pr-2">{r.qty}</td>
+                <td className="py-2 pr-2">{fmt2(r.unit, currency)}</td>
+                <td className="py-2 pr-2 font-medium">{fmt2(r.sum, currency)}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="4" className="py-4 text-slate-500">Додайте параметри для розрахунку.</td></tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+              <td colSpan="3" className="py-2 pr-2 text-right font-semibold">Разом</td>
+              <td className="py-2 pr-2 font-bold">{fmt2(breakdown.total, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+/* === CLOSETS === */
+function ClosetForm({state, setState}){
+  const s=state, setF=k=>v=>setState(p=>({...p,[k]:v}));
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  return (
+    <div className="rounded-2xl border p-3 shadow-sm space-y-3 bg-white">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <div className="text-sm font-medium mb-2">Базові параметри</div>
+          <label className="block">Кількість пройомів (секцій)
+            <StepperInput value={s.sections} onChange={v=>setF('sections')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Кількість ящиків
+            <StepperInput value={s.drawers} onChange={v=>setF('drawers')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Кількість труб
+            <StepperInput value={s.rods} onChange={v=>setF('rods')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Аксесуари (шт.)
+            <StepperInput value={s.accessories} onChange={v=>setF('accessories')(Math.max(0, asInt(v)))} />
+          </label>
+        </div>
+        <div>
+          <div className="text-sm font-medium mb-2">Умови</div>
+          <label className="block">Форма
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.shape} onChange={e=>setF('shape')(e.target.value)}>
+              <option value="straight">Прямий</option>
+              <option value="l">Г-подібний</option>
+              <option value="u">П-подібний</option>
+            </select>
+          </label>
+          <label className="block">Заміри
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+              <option value="no">Без заміру (габарити)</option>
+              <option value="hand">Заміри від руки</option>
+              <option value="scan3d">3D-замір</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 mt-2">
+            <input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)} />
+            <span>Нестандартна геометрія приміщення</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+function ClosetEstimate({breakdown, currency}){
+  const rows = breakdown.items||[];
+  const fmt2 = (n, cur='UAH') => { const v = Number.isFinite(+n) ? +n : 0; try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; } };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div className="font-semibold">Кошторис (Гардероби)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-white shadow-sm">
+            <tr className="text-left text-slate-600">
+              <th className="py-2 pr-2">Найменування</th>
+              <th className="py-2 pr-2">К-сть</th>
+              <th className="py-2 pr-2">Ставка</th>
+              <th className="py-2 pr-2">Сума</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((r,i)=>(
+              <tr key={i} className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+                <td className="py-2 pr-2">{r.label}</td>
+                <td className="py-2 pr-2">{r.qty}</td>
+                <td className="py-2 pr-2">{fmt2(r.unit, currency)}</td>
+                <td className="py-2 pr-2 font-medium">{fmt2(r.sum, currency)}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="4" className="py-4 text-slate-500">Додайте параметри для розрахунку.</td></tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+              <td colSpan="3" className="py-2 pr-2 text-right font-semibold">Разом</td>
+              <td className="py-2 pr-2 font-bold">{fmt2(breakdown.total, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* === BATHROOMS === */
+function BathroomForm({state, setState}){
+  const s=state, setF=k=>v=>setState(p=>({...p,[k]:v}));
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  return (
+    <div className="rounded-2xl border p-3 shadow-sm space-y-3 bg-white">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <div className="text-sm font-medium mb-2">Базові параметри</div>
+          <label className="block">Кількість модулів
+            <StepperInput value={s.modules} onChange={v=>setF('modules')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Кількість шухляд
+            <StepperInput value={s.drawers} onChange={v=>setF('drawers')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Кількість дверцят
+            <StepperInput value={s.doors} onChange={v=>setF('doors')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Вирізи під умивальник (шт.)
+            <StepperInput value={s.sinkCutouts} onChange={v=>setF('sinkCutouts')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Дзеркала / LED модулі (шт.)
+            <StepperInput value={s.mirrorLED} onChange={v=>setF('mirrorLED')(Math.max(0, asInt(v)))} />
+          </label>
+        </div>
+        <div>
+          <div className="text-sm font-medium mb-2">Умови</div>
+          <label className="block">Форма
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.shape} onChange={e=>setF('shape')(e.target.value)}>
+              <option value="straight">Прямий</option>
+              <option value="l">Г-подібний</option>
+              <option value="u">П-подібний</option>
+            </select>
+          </label>
+          <label className="block">Заміри
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+              <option value="no">Без заміру (габарити)</option>
+              <option value="hand">Заміри від руки</option>
+              <option value="scan3d">3D-замір</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 mt-2">
+            <input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)} />
+            <span>Нестандартна геометрія приміщення</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+function BathroomEstimate({breakdown, currency}){
+  const rows = breakdown.items||[];
+  const fmt2 = (n, cur='UAH') => { const v = Number.isFinite(+n) ? +n : 0; try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; } };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div className="font-semibold">Кошторис (Санвузли)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-white shadow-sm">
+            <tr className="text-left text-slate-600">
+              <th className="py-2 pr-2">Найменування</th>
+              <th className="py-2 pr-2">К-сть</th>
+              <th className="py-2 pr-2">Ставка</th>
+              <th className="py-2 пр-2">Сума</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((r,i)=>(
+              <tr key={i} className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+                <td className="py-2 pr-2">{r.label}</td>
+                <td className="py-2 pr-2">{r.qty}</td>
+                <td className="py-2 pr-2">{fmt2(r.unit, currency)}</td>
+                <td className="py-2 pr-2 font-medium">{fmt2(r.sum, currency)}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="4" className="py-4 text-slate-500">Додайте параметри для розрахунку.</td></tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+              <td colSpan="3" className="py-2 pr-2 text-right font-semibold">Разом</td>
+              <td className="py-2 pr-2 font-bold">{fmt2(breakdown.total, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* === TABLES === */
+function TableForm({state, setState}){
+  const s=state, setF=k=>v=>setState(p=>({...p,[k]:v}));
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  return (
+    <div className="rounded-2xl border p-3 shadow-sm space-y-3 bg-white">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <div className="text-sm font-medium mb-2">Базові параметри</div>
+          <label className="block">Кількість столів
+            <StepperInput value={s.tables} onChange={v=>setF('tables')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Механізми розкладання (шт.)
+            <StepperInput value={s.mechanisms} onChange={v=>setF('mechanisms')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Шухляди (шт.)
+            <StepperInput value={s.drawers} onChange={v=>setF('drawers')(Math.max(0, asInt(v)))} />
+          </label>
+        </div>
+        <div>
+          <div className="text-sm font-medium mb-2">Умови</div>
+          <label className="block">Форма
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.shape} onChange={e=>setF('shape')(e.target.value)}>
+              <option value="rect">Прямокутний</option>
+              <option value="round">Круглий/Овальний</option>
+              <option value="complex">Складна форма</option>
+            </select>
+          </label>
+          <label className="block">Заміри
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+              <option value="no">Без заміру (габарити)</option>
+              <option value="hand">Заміри від руки</option>
+              <option value="scan3d">3D-замір</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 mt-2">
+            <input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)} />
+            <span>Нестандартна геометрія</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+function TableEstimate({breakdown, currency}){
+  const rows = breakdown.items||[];
+  const fmt2 = (n, cur='UAH') => { const v = Number.isFinite(+n) ? +n : 0; try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; } };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div className="font-semibold">Кошторис (Столи)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-white shadow-sm">
+            <tr className="text-left text-slate-600">
+              <th className="py-2 pr-2">Найменування</th>
+              <th className="py-2 pr-2">К-сть</th>
+              <th className="py-2 pr-2">Ставка</th>
+              <th className="py-2 pr-2">Сума</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((r,i)=>(
+              <tr key={i} className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+                <td className="py-2 pr-2">{r.label}</td>
+                <td className="py-2 pr-2">{r.qty}</td>
+                <td className="py-2 pr-2">{fmt2(r.unit, currency)}</td>
+                <td className="py-2 pr-2 font-medium">{fmt2(r.sum, currency)}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="4" className="py-4 text-slate-500">Додайте параметри для розрахунку.</td></tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+              <td colSpan="3" className="py-2 pr-2 text-right font-semibold">Разом</td>
+              <td className="py-2 pr-2 font-bold">{fmt2(breakdown.total, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* === WALLPANELS === */
+function WallpanelForm({state, setState}){
+  const s=state, setF=k=>v=>setState(p=>({...p,[k]:v}));
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  const asNum = v => { const n = parseFloat(String(v).replace(',','.')); return Number.isFinite(n)?n:0; };
+  return (
+    <div className="rounded-2xl border p-3 shadow-sm space-y-3 bg-white">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <div className="text-sm font-medium mb-2">Базові параметри</div>
+          <label className="block">Площа (м²)
+            <input type="number" step="0.01" className="mt-1 w-full p-2 border rounded-xl" value={s.area} onChange={e=>setF('area')(Math.max(0, asNum(e.target.value)))} />
+          </label>
+          <label className="block">Вирізи (шт.)
+            <StepperInput value={s.cutouts} onChange={v=>setF('cutouts')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">LED-канали (шт.)
+            <StepperInput value={s.ledChannels} onChange={v=>setF('ledChannels')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Кути/стики (шт.)
+            <StepperInput value={s.corners} onChange={v=>setF('corners')(Math.max(0, asInt(v)))} />
+          </label>
+        </div>
+        <div>
+          <div className="text-sm font-medium mb-2">Умови</div>
+          <label className="block">Заміри
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+              <option value="no">Без заміру (габарити)</option>
+              <option value="hand">Заміри від руки</option>
+              <option value="scan3d">3D-замір</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 mt-2">
+            <input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)} />
+            <span>Нестандартна геометрія</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+function WallpanelEstimate({breakdown, currency}){
+  const rows = breakdown.items||[];
+  const fmt2 = (n, cur='UAH') => { const v = Number.isFinite(+n) ? +n : 0; try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; } };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div className="font-semibold">Кошторис (Стінові панелі)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-white shadow-sm">
+            <tr className="text-left text-slate-600">
+              <th className="py-2 pr-2">Найменування</th>
+              <th className="py-2 pr-2">К-сть</th>
+              <th className="py-2 pr-2">Ставка</th>
+              <th className="py-2 pr-2">Сума</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((r,i)=>(
+              <tr key={i} className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+                <td className="py-2 pr-2">{r.label}</td>
+                <td className="py-2 pr-2">{r.qty}</td>
+                <td className="py-2 pr-2">{fmt2(r.unit, currency)}</td>
+                <td className="py-2 pr-2 font-medium">{fmt2(r.sum, currency)}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="4" className="py-4 text-slate-500">Додайте параметри для розрахунку.</td></tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+              <td colSpan="3" className="py-2 pr-2 text-right font-semibold">Разом</td>
+              <td className="py-2 pr-2 font-bold">{fmt2(breakdown.total, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* === CUSTOM === */
+function CustomForm({state, setState}){
+  const s=state, setF=k=>v=>setState(p=>({...p,[k]:v}));
+  const asInt = v => { const n = parseInt(String(v),10); return Number.isFinite(n)?n:0; };
+  return (
+    <div className="rounded-2xl border p-3 shadow-sm space-y-3 bg-white">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <div className="text-sm font-medium mb-2">Базові параметри</div>
+          <label className="block">Кількість елементів
+            <StepperInput value={s.elements} onChange={v=>setF('elements')(Math.max(0, asInt(v)))} />
+          </label>
+          <label className="block">Матеріал
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.material} onChange={e=>setF('material')(e.target.value)}>
+              <option value="dsp">ДСП</option>
+              <option value="mdf_paint">MDF/фарба</option>
+              <option value="glass">Скло</option>
+              <option value="metal">Метал</option>
+              <option value="other">Інше</option>
+            </select>
+          </label>
+          <label className="block">Складність
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.complexity} onChange={e=>setF('complexity')(e.target.value)}>
+              <option value="simple">Проста</option>
+              <option value="medium">Середня</option>
+              <option value="complex">Висока</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <div className="text-sm font-medium mb-2">Умови</div>
+          <label className="block">Заміри
+            <select className="mt-1 w-full p-2 border rounded-xl" value={s.measurement} onChange={e=>setF('measurement')(e.target.value)}>
+              <option value="no">Без заміру (габарити)</option>
+              <option value="hand">Заміри від руки</option>
+              <option value="scan3d">3D-замір</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 mt-2">
+            <input type="checkbox" checked={!!s.nonstdGeom} onChange={e=>setF('nonstdGeom')(!!e.target.checked)} />
+            <span>Нестандартна геометрія</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+function CustomEstimate({breakdown, currency}){
+  const rows = breakdown.items||[];
+  const fmt2 = (n, cur='UAH') => { const v = Number.isFinite(+n) ? +n : 0; try { return new Intl.NumberFormat('uk-UA', {style:'currency', currency:cur}).format(v); } catch { return `${v.toLocaleString('uk-UA')} ₴`; } };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div className="font-semibold">Кошторис (Нестандартні)</div>
+      </div>
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-white shadow-sm">
+            <tr className="text-left text-slate-600">
+              <th className="py-2 pr-2">Найменування</th>
+              <th className="py-2 pr-2">К-сть</th>
+              <th className="py-2 pr-2">Ставка</th>
+              <th className="py-2 pr-2">Сума</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((r,i)=>(
+              <tr key={i} className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+                <td className="py-2 pr-2">{r.label}</td>
+                <td className="py-2 pr-2">{r.qty}</td>
+                <td className="py-2 pr-2">{fmt2(r.unit, currency)}</td>
+                <td className="py-2 pr-2 font-medium">{fmt2(r.sum, currency)}</td>
+              </tr>
+            )) : (
+              <tr><td colSpan="4" className="py-4 text-slate-500">Додайте параметри для розрахунку.</td></tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t odd:bg-slate-50 hover:bg-slate-100 transition-colors">
+              <td colSpan="3" className="py-2 pr-2 text-right font-semibold">Разом</td>
+              <td className="py-2 pr-2 font-bold">{fmt2(breakdown.total, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* === END NEW CATEGORIES === */
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
